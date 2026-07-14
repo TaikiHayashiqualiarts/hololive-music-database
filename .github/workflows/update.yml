@@ -1,33 +1,47 @@
 name: Update Hololive Music Database
+
 on:
   workflow_dispatch:
   schedule:
-    # GitHub cron is UTC. 15:00 UTC = 00:00 Asia/Tokyo (next day).
+    # 15:00 UTC = 翌日 00:00 Asia/Tokyo
     - cron: '0 15 * * *'
+
 permissions:
   contents: write
+
 concurrency:
   group: hololive-music-update
   cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-      - run: npm install
-      - run: npx playwright install --with-deps chromium
-      - name: Collect and update
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Syntax check
+        run: npm run check
+
+      - name: Collect database
         run: npm run update
         env:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           SHEETS_WEB_APP_URL: ${{ secrets.SHEETS_WEB_APP_URL }}
           SHEETS_WEB_APP_TOKEN: ${{ secrets.SHEETS_WEB_APP_TOKEN }}
-      - name: Commit generated database
+
+      - name: Commit generated database and diagnostics
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
