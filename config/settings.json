@@ -1,0 +1,30 @@
+{
+  "spreadsheetId": "1TOOueIldd9LUc70RAbC_OPIWLhDhXvOX9ThG-6G36rw",
+  "timeZone": "Asia/Tokyo",
+  "sheets": {
+    "songs": "楽曲DB",
+    "talentRows": "楽曲一覧",
+    "videos": "動画DB",
+    "logs": "取得ログ"
+  },
+  "wiki": {
+    "home": "https://seesaawiki.jp/hololivetv/",
+    "coverLinkText": ["歌ってみた動画一覧", "簡易版"],
+    "originalLinkText": ["オリジナルソング", "早見表"]
+  },
+  "videoRules": {
+    "minDurationSeconds": 90,
+    "maxDurationSeconds": 360,
+    "includeRemix": true,
+    "includeInstrumental": false,
+    "excludeShorts": true,
+    "excludeLive": true,
+    "excludeClips": true
+  },
+  "officialChannels": [
+    {"owner":"ホロライブ公式","group":"JP公式","handles":["hololive"]},
+    {"owner":"hololive English公式","group":"EN公式","handles":["hololiveEnglish"]},
+    {"owner":"hololive Indonesia公式","group":"ID公式","handles":["hololiveIndonesia"]},
+    {"owner":"hololive DEV_IS公式","group":"DEV_IS公式","handles":["hololiveDEV_IS"]}
+  ]
+}
