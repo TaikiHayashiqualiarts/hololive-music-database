@@ -1,78 +1,204 @@
+import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 import * as cheerio from 'cheerio';
-import { clean, normalize, parseDate, videoIdFromUrl } from './util.js';
+import { clean, normalize, parseDate, unique, videoIdFromUrl } from './util.js';
 import { TALENT_LIST } from './talents.js';
 
-function talentNames(text) {
-  const n=normalize(text); const found=[];
-  for (const t of TALENT_LIST) {
-    const names=[t.kanji,t.eng,...t.aliases].map(normalize).filter(x=>x.length>=2);
-    if (names.some(x=>n.includes(x))) found.push(t.kanji);
-  }
-  return [...new Set(found)];
+const DATE_PATTERN = /20\d{2}\s*[./年-]\s*\d{1,2}\s*[./月-]\s*\d{1,2}/;
+const YOUTUBE_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/)[\w-]{11}[^\s<]*/gi;
+
+function aliasesFor(talent) {
+  return unique([talent.kanji, talent.eng, ...talent.aliases])
+    .map(value => normalize(value))
+    .filter(value => value.length >= 2);
 }
-function headerIndex(headers, words){ return headers.findIndex(h=>words.some(w=>normalize(h).includes(normalize(w)))); }
-function parseTable($, table, type, sourceUrl) {
-  const rows=[]; const trs=$(table).find('tr').toArray(); if(!trs.length) return rows;
-  let headers=$(trs[0]).find('th,td').map((_,e)=>clean($(e).text())).get();
-  const looksHeader=headers.some(h=>/日付|メンバー|曲名|備考|歌唱/.test(h));
-  const start=looksHeader?1:0;
-  const dateI=headerIndex(headers,['日付','公開日','投稿日']);
-  const memberI=headerIndex(headers,['メンバー','歌唱','歌手','アーティスト']);
-  const songI=headerIndex(headers,['曲名','楽曲名','タイトル']);
-  const noteI=headerIndex(headers,['備考','注記']);
-  for(let i=start;i<trs.length;i++){
-    const cells=$(trs[i]).find('th,td').toArray(); if(cells.length<2) continue;
-    const texts=cells.map(e=>clean($(e).text()));
-    const links=cells.flatMap(e=>$(e).find('a[href]').map((_,a)=>$(a).attr('href')).get()).filter(Boolean);
-    const date=(dateI>=0?parseDate(texts[dateI]):texts.map(parseDate).find(Boolean))||'';
-    const members=memberI>=0?texts[memberI]:texts.find(x=>talentNames(x).length)||'';
-    let song=songI>=0?texts[songI]:'';
-    if(!song){
-      const candidates=texts.filter(x=>x && !parseDate(x) && x!==members && !/編集|備考|動画|link/i.test(x));
-      song=candidates.sort((a,b)=>b.length-a.length)[0]||'';
-    }
-    const singers=talentNames(members+' '+texts.join(' '));
-    const youtube=links.find(x=>/youtu\.be|youtube\.com/.test(x))||'';
-    const videoId=videoIdFromUrl(youtube);
-    if(!song || (!date && !videoId && !singers.length)) continue;
-    if(/日付|メンバー|曲名|備考/.test(song) && song.length<20) continue;
-    rows.push({type,date,membersRaw:members,singers,song,notes:noteI>=0?texts[noteI]:'',videoId,videoUrl:youtube,sourceUrl});
+
+const TALENT_ALIASES = TALENT_LIST.map(talent => ({
+  name: talent.kanji,
+  aliases: aliasesFor(talent),
+}));
+
+function detectTalents(text) {
+  const normalized = normalize(text);
+  return TALENT_ALIASES
+    .filter(talent => talent.aliases.some(alias => normalized.includes(alias)))
+    .map(talent => talent.name);
+}
+
+function linksFromElement($, element) {
+  return $(element)
+    .find('a[href]')
+    .map((_, anchor) => $(anchor).attr('href'))
+    .get()
+    .filter(Boolean);
+}
+
+function chooseSong(cells, memberText, dateText) {
+  const ignored = /^(編集|詳細|備考|動画|リンク|link|日付|投稿日|公開日|メンバー|歌唱者|曲名|楽曲名)$/i;
+  const candidates = cells
+    .map(clean)
+    .filter(Boolean)
+    .filter(value => value !== memberText && value !== dateText)
+    .filter(value => !parseDate(value))
+    .filter(value => !ignored.test(value))
+    .filter(value => !/^(https?:\/\/|youtu\.be)/i.test(value));
+
+  return candidates
+    .sort((a, b) => {
+      const aScore = detectTalents(a).length ? -100 : a.length;
+      const bScore = detectTalents(b).length ? -100 : b.length;
+      return bScore - aScore;
+    })[0] || '';
+}
+
+function rowObject({ type, sourceUrl, text, cells = [], links = [] }) {
+  const date = parseDate(text) || cells.map(parseDate).find(Boolean) || '';
+  const singers = detectTalents(text);
+  const memberCell = cells.find(cell => detectTalents(cell).length > 0) || '';
+  const dateCell = cells.find(cell => Boolean(parseDate(cell))) || '';
+  const youtubeUrl = links.find(link => /youtu\.be|youtube\.com/i.test(link))
+    || text.match(YOUTUBE_PATTERN)?.[0]
+    || '';
+  const videoId = videoIdFromUrl(youtubeUrl);
+  const song = chooseSong(cells, memberCell, dateCell);
+
+  if (!song) return null;
+  if (!date && !videoId && singers.length === 0) return null;
+  if (/^(日付|投稿日|公開日|メンバー|歌唱者|曲名|楽曲名|備考)$/i.test(song)) return null;
+
+  return {
+    type,
+    date,
+    membersRaw: memberCell,
+    singers,
+    song,
+    notes: '',
+    videoId,
+    videoUrl: youtubeUrl,
+    sourceUrl,
+  };
+}
+
+function parseTables($, type, sourceUrl) {
+  const rows = [];
+  $('table tr').each((_, tr) => {
+    const cells = $(tr).find('th,td').map((__, cell) => clean($(cell).text())).get();
+    if (cells.length < 2) return;
+    const text = cells.join(' | ');
+    const parsed = rowObject({ type, sourceUrl, text, cells, links: linksFromElement($, tr) });
+    if (parsed) rows.push(parsed);
+  });
+  return rows;
+}
+
+function parseStructuredBlocks($, type, sourceUrl) {
+  const rows = [];
+  const selectors = [
+    '.wiki-content li', '.user-area li', '.article-body li',
+    '.wiki-content p', '.user-area p', '.article-body p',
+    '.wiki-content > div', '.user-area > div', '.article-body > div',
+  ];
+
+  $(selectors.join(',')).each((_, element) => {
+    const text = clean($(element).text());
+    if (!DATE_PATTERN.test(text) && !/youtu\.be|youtube\.com/i.test($(element).html() || '')) return;
+    const cells = text.split(/\s{2,}|\||\t/).map(clean).filter(Boolean);
+    const parsed = rowObject({ type, sourceUrl, text, cells, links: linksFromElement($, element) });
+    if (parsed) rows.push(parsed);
+  });
+  return rows;
+}
+
+function parseTextLines(bodyText, type, sourceUrl) {
+  const lines = String(bodyText)
+    .split(/\r?\n/)
+    .map(clean)
+    .filter(Boolean);
+  const rows = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!DATE_PATTERN.test(lines[i])) continue;
+    const block = lines.slice(i, Math.min(lines.length, i + 7));
+    const text = block.join(' | ');
+    const parsed = rowObject({ type, sourceUrl, text, cells: block, links: text.match(YOUTUBE_PATTERN) || [] });
+    if (parsed) rows.push(parsed);
   }
   return rows;
 }
-async function discover(page, home, keywords, fallback){
-  await page.goto(home,{waitUntil:'domcontentloaded',timeout:90000});
-  const links=await page.locator('a[href]').evaluateAll(as=>as.map(a=>({text:(a.textContent||'').replace(/\s+/g,' ').trim(),href:a.href})));
-  const hit=links.find(x=>keywords.every(k=>x.text.includes(k)));
-  return hit?.href||fallback;
-}
-export async function fetchWiki(settings, log=console.log){
-  const browser=await chromium.launch({headless:true});
-  const context=await browser.newContext({locale:'ja-JP',userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36'});
-  const page=await context.newPage();
-  const fallbackCover='https://seesaawiki.jp/hololivetv/d/%a5%db%a5%ed%a5%e9%a5%a4%a5%d6%a1%da%b2%ce%a4%c3%a4%c6%a4%df%a4%bf%c6%b0%b2%e8%b0%ec%cd%f7%a1%db_%b4%ca%b0%d7%c8%c7';
-  const fallbackOriginal='https://seesaawiki.jp/hololivetv/d/%a5%aa%a5%ea%a5%b8%a5%ca%a5%eb%a5%bd%a5%f3%a5%b0_%c1%e1%b8%ab%c9%bd%a5%c7%a1%bc%a5%bf';
-  const sources=[
-    {type:'カバー',url:await discover(page,settings.wiki.home,settings.wiki.coverLinkText,fallbackCover)},
-    {type:'オリジナル曲',url:await discover(page,settings.wiki.home,settings.wiki.originalLinkText,fallbackOriginal)}
-  ];
-  const all=[];
-  for(const src of sources){
-    log(`Wiki取得: ${src.type} ${src.url}`);
-    await page.goto(src.url,{waitUntil:'networkidle',timeout:120000});
-    const html=await page.content(); const $=cheerio.load(html);
-    let rows=[]; $('table').each((_,t)=>rows.push(...parseTable($,t,src.type,src.url)));
-    if(!rows.length){
-      await page.screenshot({path:`output/wiki-${src.type}.png`,fullPage:true});
-      await BunWriteFallback(`output/wiki-${src.type}.html`,html);
-      throw new Error(`${src.type}ページから表を抽出できませんでした。診断HTML/画像をoutputに保存しました。`);
-    }
-    log(`Wiki抽出: ${src.type} ${rows.length}件`); all.push(...rows);
+
+function dedupeRows(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = [normalize(row.song), [...row.singers].sort().join('|'), row.type, row.videoId || row.date].join('|');
+    const existing = map.get(key);
+    if (!existing || (!existing.videoId && row.videoId)) map.set(key, row);
   }
-  await browser.close();
-  const map=new Map();
-  for(const r of all){ const key=`${normalize(r.song)}|${[...r.singers].sort().join('|')}|${r.type}|${r.videoId}`; if(!map.has(key))map.set(key,r); }
   return [...map.values()];
 }
-async function BunWriteFallback(path,data){ const {writeFile,mkdir}=await import('node:fs/promises'); await mkdir('output',{recursive:true}); await writeFile(path,data); }
+
+async function saveDiagnostics(page, type, html, bodyText) {
+  await fs.mkdir('output/diagnostics', { recursive: true });
+  const safeType = type === 'カバー' ? 'cover' : 'original';
+  await Promise.all([
+    fs.writeFile(`output/diagnostics/wiki-${safeType}.html`, html),
+    fs.writeFile(`output/diagnostics/wiki-${safeType}.txt`, bodyText),
+    page.screenshot({ path: `output/diagnostics/wiki-${safeType}.png`, fullPage: true }),
+  ]);
+}
+
+async function openWikiPage(page, source) {
+  const response = await page.goto(source.url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.waitForTimeout(3000);
+  const status = response?.status() || 0;
+  const title = await page.title();
+  const html = await page.content();
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  return { status, title, html, bodyText, finalUrl: page.url() };
+}
+
+export async function fetchWiki(settings, log = console.log) {
+  await fs.mkdir('output', { recursive: true });
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    locale: 'ja-JP',
+    timezoneId: 'Asia/Tokyo',
+    viewport: { width: 1440, height: 1000 },
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    extraHTTPHeaders: {
+      'accept-language': 'ja,en-US;q=0.8,en;q=0.6',
+      referer: settings.wiki.home,
+    },
+  });
+  const page = await context.newPage();
+  const allRows = [];
+
+  try {
+    for (const source of settings.wiki.sources) {
+      log(`Wiki取得開始: ${source.type}`);
+      const result = await openWikiPage(page, source);
+      log(`Wiki応答: ${source.type} status=${result.status} title=${result.title} chars=${result.bodyText.length}`);
+
+      const $ = cheerio.load(result.html);
+      const parsed = dedupeRows([
+        ...parseTables($, source.type, result.finalUrl),
+        ...parseStructuredBlocks($, source.type, result.finalUrl),
+        ...parseTextLines(result.bodyText, source.type, result.finalUrl),
+      ]);
+
+      await saveDiagnostics(page, source.type, result.html, result.bodyText);
+
+      if (parsed.length === 0) {
+        throw new Error(`${source.type}を解析できませんでした。status=${result.status}, 本文=${result.bodyText.length}文字。output/diagnostics を確認してください。`);
+      }
+
+      log(`Wiki抽出完了: ${source.type} ${parsed.length}件`);
+      allRows.push(...parsed);
+    }
+  } finally {
+    await browser.close();
+  }
+
+  const rows = dedupeRows(allRows);
+  await fs.writeFile('output/wiki_raw.json', JSON.stringify(rows, null, 2));
+  return rows;
+}

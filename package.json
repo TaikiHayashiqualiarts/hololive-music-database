@@ -1,16 +1,19 @@
 {
   "name": "hololive-music-database",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "update": "node src/main.js",
-    "check": "node --check src/main.js && node --check src/wiki.js && node --check src/youtube.js && node --check src/database.js"
+    "wiki:diagnose": "node src/diagnose-wiki.js",
+    "check": "node --check src/main.js && node --check src/wiki.js && node --check src/youtube.js && node --check src/database.js && node --check src/sheets.js && node --check src/util.js && node --check src/diagnose-wiki.js"
   },
   "dependencies": {
     "cheerio": "^1.1.0",
     "csv-stringify": "^6.6.0",
     "playwright": "^1.54.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

@@ -1,59 +1,31 @@
-# hololive-music-database
+# hololive-music-database — Phase 1
 
-非公式Wikiを主データ、YouTube Data APIを補完データとして、曲単位のホロライブ楽曲DBを生成し、Googleスプレッドシートへ反映します。
+非公式Wikiを主データとして読み込み、Wikiに掲載されたYouTube動画IDをYouTube Data APIで照合し、曲単位のCSVを生成します。
 
-設定済み:
-- Spreadsheet ID: `1TOOueIldd9LUc70RAbC_OPIWLhDhXvOX9ThG-6G36rw`
-- 出力シート: `楽曲DB` / `楽曲一覧` / `動画DB` / `取得ログ`
-- 更新時刻: 毎日 00:00 Asia/Tokyo（GitHub Actions cronは15:00 UTC）
+## このPhaseで実装済み
 
-## 1. GitHubへアップロード
+- Playwright（Chromium）によるSeesaa Wiki取得
+- 表・リスト・本文行の3方式によるWiki解析
+- 取得HTML、本文、スクリーンショットの診断保存
+- Wiki掲載YouTube動画の公開日、再生数、動画時間、チャンネル取得
+- 曲単位の `songs.csv`
+- タレント別展開の `talent_rows.csv`
+- 曲と動画の紐付け `videos.csv`
+- GoogleスプレッドシートWeb Appへの送信
+- 毎日0時（Asia/Tokyo）のGitHub Actions
 
-このZIPを展開し、リポジトリの **Add file → Upload files** から、中身をフォルダ構造のままアップロードします。
+## 現時点の範囲
 
-## 2. YouTube APIキー
+Phase 1ではWikiに掲載された動画IDを中心に照合します。全タレント公式チャンネル、Topicチャンネル、Wiki未掲載動画の網羅走査はPhase 2で追加します。
 
-Google Cloud Consoleで YouTube Data API v3 を有効にし、APIキーを作ります。GitHubの
-`Settings → Secrets and variables → Actions → New repository secret` に以下を登録します。
+## GitHub Actionsファイル
 
-- Name: `YOUTUBE_API_KEY`
-- Secret: 作成したAPIキー
+同梱の `update.yml` の内容を、GitHub上の `.github/workflows/update.yml` に貼り付けてください。
 
-APIキーをREADMEやコードへ直接書かないでください。
+## 必要なSecrets
 
-## 3. スプレッドシート受信GAS
+- `YOUTUBE_API_KEY`
+- `SHEETS_WEB_APP_URL`（スプレッドシート反映を始める段階で追加）
+- `SHEETS_WEB_APP_TOKEN`（スプレッドシート反映を始める段階で追加）
 
-対象スプレッドシートを開き、`拡張機能 → Apps Script` へ `gas/Code.gs` 全文を貼ります。
-
-1. `setupReceiver` を実行
-2. 実行ログに出た長いトークンをコピー
-3. `デプロイ → 新しいデプロイ → ウェブアプリ`
-4. 実行するユーザー: 自分
-5. アクセスできるユーザー: 全員
-6. デプロイ後の `/exec` URLをコピー
-
-GitHub Secretsへ登録:
-- `SHEETS_WEB_APP_URL`: `/exec` URL
-- `SHEETS_WEB_APP_TOKEN`: `setupReceiver` のログに出たトークン
-
-URLが全員アクセス可でも、正しいトークンがないPOSTは拒否されます。
-
-## 4. 初回実行
-
-GitHubリポジトリで `Actions → Update Hololive Music Database → Run workflow`。
-
-成功すると、スプレッドシートの指定4シートだけを全置換します。他のシートは削除しません。
-
-## 判定ルール
-
-- Wiki掲載行を楽曲マスターとする
-- YouTube動画IDがWikiにある場合は最優先で照合
-- 動画時間 1:30〜6:00
-- Shorts、生配信、歌枠、ライブ映像、公式切り抜き、Instrumental/Off Vocalを除外
-- 複数歌唱者はユニット、1名はソロ
-- Wikiページ種別をオリジナル/カバーの主判定にする
-- MV、Topic、アルバム自動生成音源など複数動画は同一曲へ紐付け、代表動画は再生数最大を採用
-
-## 注意
-
-Seesaa WikiのHTML構造が変わった場合、取得失敗時に `output/wiki-*.html` と画像が保存されるため、GitHub Actionsの出力で診断できます。
+`SHEETS_WEB_APP_URL` と `SHEETS_WEB_APP_TOKEN` が未設定でも、CSV生成までは動きます。

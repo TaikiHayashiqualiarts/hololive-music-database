@@ -1,36 +1,96 @@
 import { isoDurationToSeconds, normalize, sleep } from './util.js';
 
-const API='https://www.googleapis.com/youtube/v3';
-async function yt(path, params, key){
-  const u=new URL(API+path); Object.entries({...params,key}).forEach(([k,v])=>v!==undefined&&v!==''&&u.searchParams.set(k,String(v)));
-  const r=await fetch(u); if(!r.ok) throw new Error(`YouTube API ${r.status}: ${await r.text()}`); return r.json();
-}
-export async function videoDetails(ids,key){
-  const map=new Map();
-  for(let i=0;i<ids.length;i+=50){
-    const batch=ids.slice(i,i+50); const j=await yt('/videos',{part:'snippet,contentDetails,statistics,status',id:batch.join(',')},key);
-    for(const x of j.items||[]) map.set(x.id,{videoId:x.id,title:x.snippet.title,description:x.snippet.description||'',publishedAt:x.snippet.publishedAt,channelId:x.snippet.channelId,channelTitle:x.snippet.channelTitle,durationSeconds:isoDurationToSeconds(x.contentDetails.duration),viewCount:Number(x.statistics?.viewCount||0),liveBroadcastContent:x.snippet.liveBroadcastContent||'none',url:`https://www.youtube.com/watch?v=${x.id}`});
+const API = 'https://www.googleapis.com/youtube/v3';
+
+async function request(path, params, apiKey) {
+  const url = new URL(`${API}${path}`);
+  for (const [key, value] of Object.entries({ ...params, key: apiKey })) {
+    if (value !== undefined && value !== '') url.searchParams.set(key, String(value));
   }
-  return map;
+
+  const response = await fetch(url, { headers: { accept: 'application/json' } });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`YouTube API ${response.status}: ${body}`);
+  return JSON.parse(body);
 }
-export async function channelByHandle(handle,key){
-  const h=String(handle).replace(/^@/,''); const j=await yt('/channels',{part:'snippet,contentDetails',forHandle:h},key); const x=j.items?.[0];
-  return x?{channelId:x.id,title:x.snippet.title,uploads:x.contentDetails.relatedPlaylists.uploads}:null;
+
+export async function videoDetails(ids, apiKey) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const videos = new Map();
+
+  for (let index = 0; index < uniqueIds.length; index += 50) {
+    const batch = uniqueIds.slice(index, index + 50);
+    const json = await request('/videos', {
+      part: 'snippet,contentDetails,statistics,status',
+      id: batch.join(','),
+      maxResults: 50,
+    }, apiKey);
+
+    for (const item of json.items || []) {
+      videos.set(item.id, {
+        videoId: item.id,
+        title: item.snippet.title,
+        description: item.snippet.description || '',
+        publishedAt: item.snippet.publishedAt,
+        channelId: item.snippet.channelId,
+        channelTitle: item.snippet.channelTitle,
+        durationSeconds: isoDurationToSeconds(item.contentDetails.duration),
+        viewCount: Number(item.statistics?.viewCount || 0),
+        liveBroadcastContent: item.snippet.liveBroadcastContent || 'none',
+        privacyStatus: item.status?.privacyStatus || '',
+        url: `https://www.youtube.com/watch?v=${item.id}`,
+      });
+    }
+    await sleep(50);
+  }
+  return videos;
 }
-export async function channelById(id,key){ const j=await yt('/channels',{part:'snippet,contentDetails',id},key); const x=j.items?.[0]; return x?{channelId:x.id,title:x.snippet.title,uploads:x.contentDetails.relatedPlaylists.uploads}:null; }
-export async function uploads(playlistId,key,maxPages=Infinity){
-  const ids=[]; let token=''; let pages=0;
-  do{ const j=await yt('/playlistItems',{part:'contentDetails',playlistId,maxResults:50,pageToken:token},key); ids.push(...(j.items||[]).map(x=>x.contentDetails.videoId)); token=j.nextPageToken||''; pages++; await sleep(30); }while(token&&pages<maxPages);
+
+export async function channelByHandle(handle, apiKey) {
+  const normalizedHandle = String(handle).replace(/^@/, '');
+  const json = await request('/channels', {
+    part: 'snippet,contentDetails',
+    forHandle: normalizedHandle,
+  }, apiKey);
+  const item = json.items?.[0];
+  if (!item) return null;
+  return {
+    channelId: item.id,
+    title: item.snippet.title,
+    uploads: item.contentDetails.relatedPlaylists.uploads,
+  };
+}
+
+export async function uploads(playlistId, apiKey, maxPages = Infinity) {
+  const ids = [];
+  let pageToken = '';
+  let pageCount = 0;
+  do {
+    const json = await request('/playlistItems', {
+      part: 'contentDetails',
+      playlistId,
+      maxResults: 50,
+      pageToken,
+    }, apiKey);
+    ids.push(...(json.items || []).map(item => item.contentDetails.videoId));
+    pageToken = json.nextPageToken || '';
+    pageCount += 1;
+    await sleep(50);
+  } while (pageToken && pageCount < maxPages);
   return ids;
 }
-export function classifyVideo(v,rules){
-  const text=normalize(v.title+' '+v.description); const reasons=[];
-  if(v.durationSeconds<rules.minDurationSeconds||v.durationSeconds>rules.maxDurationSeconds) reasons.push('duration');
-  if(rules.excludeShorts&&(/#shorts|\bshorts\b/.test(text)||/youtube\.com\/shorts\//.test(v.url))) reasons.push('shorts');
-  if(rules.excludeLive&&(/歌枠|karaoke|singing stream|3d live|birthday live|anniversary live|concert|生放送|配信/.test(text)||v.liveBroadcastContent!=='none')) reasons.push('live');
-  if(rules.excludeClips&&(/切り抜き|official clip|highlight|digest|from live/.test(text))) reasons.push('clip');
-  if(!rules.includeInstrumental&&(/instrumental|off vocal|inst\.?\b|カラオケ音源/.test(text))) reasons.push('instrumental');
-  if(!rules.includeRemix&&/remix/.test(text)) reasons.push('remix');
-  const positive=/歌ってみた|cover|covered by|original song|オリジナル|official mv|music video|lyric video|provided to youtube|auto-generated by youtube|official audio/.test(text);
-  return {include:reasons.length===0&&positive,reasons};
+
+export function classifyVideo(video, rules) {
+  const text = normalize(`${video.title} ${video.description}`);
+  const reasons = [];
+
+  if (video.durationSeconds < rules.minDurationSeconds || video.durationSeconds > rules.maxDurationSeconds) reasons.push('duration');
+  if (rules.excludeShorts && (/#shorts|\bshorts\b/.test(text) || /youtube\.com\/shorts\//.test(video.url))) reasons.push('shorts');
+  if (rules.excludeLive && (/歌枠|karaoke|singing stream|3d live|birthday live|anniversary live|concert|生放送|ライブ配信/.test(text) || video.liveBroadcastContent !== 'none')) reasons.push('live');
+  if (rules.excludeClips && /切り抜き|official clip|highlight|digest|from live/.test(text)) reasons.push('clip');
+  if (!rules.includeInstrumental && /instrumental|off vocal|カラオケ音源|\binst\.?\b/.test(text)) reasons.push('instrumental');
+  if (!rules.includeRemix && /\bremix\b/.test(text)) reasons.push('remix');
+
+  const positive = /歌ってみた|cover|covered by|original song|オリジナル|official mv|music video|lyric video|provided to youtube|auto generated by youtube|official audio/.test(text);
+  return { include: reasons.length === 0 && positive, positive, reasons };
 }
