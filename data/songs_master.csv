@@ -1,2 +1,2 @@
-song_id,song_name,singers,singer_count,unit_type,song_type,first_date,wiki_url,wiki_video_id
-HOL000001,ビビデバ,"[""星街すいせい""]",1,ソロ,Original,2024-03-22,,8ZP5eqm4JqM
+song_id,title,type,singers,release_date,official_video_id,composer,lyricist,arranger,remarks
+HOL000001,ビビデバ,original,"[""星街すいせい""]",2024-03-22,8ZP5eqm4JqM,ツミキ,ツミキ,ツミキ,
