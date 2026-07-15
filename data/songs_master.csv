@@ -1,1 +1,4 @@
-song_id,song_name,singers,song_type,first_date,wiki_url,wiki_video_id
+song_id,song_name,singers,singer_count,unit_type,song_type,wiki_url,wiki_video_id
+HOL000001,ビビデバ,"[""星街すいせい""]",1,ソロ,Original,,
+HOL000002,KING,"[""白上フブキ""]",1,ソロ,Cover,,
+HOL000003,Shiny Smily Story,"[""ときのそら"",""ロボ子さん"",""AZKi""]",3,ユニット,Original,,
